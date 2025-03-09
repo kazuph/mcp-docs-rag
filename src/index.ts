@@ -48,6 +48,12 @@ if (!fs.existsSync(DOCS_PATH)) {
   fs.mkdirSync(DOCS_PATH, { recursive: true });
 }
 
+// Ensure .indices directory exists
+const INDICES_PATH = path.join(DOCS_PATH, '.indices');
+if (!fs.existsSync(INDICES_PATH)) {
+  fs.mkdirSync(INDICES_PATH, { recursive: true });
+}
+
 // Store indices for each document collection
 const indices: Record<string, { index: VectorStoreIndex, description: string }> = {};
 
