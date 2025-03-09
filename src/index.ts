@@ -395,7 +395,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // 一時的にGemini LLMを設定
       const originalLLM = Settings.llm;
       const gemini = new Gemini({
-        model: GEMINI_MODEL.GEMINI_PRO
+        model: GEMINI_MODEL.GEMINI_2_0_FLASH
       });
       
       // グローバル設定に設定
