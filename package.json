@@ -1,6 +1,6 @@
 {
   "name": "mcp-docs-rag",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "description": "RAG (Retrieval-Augmented Generation) MCP server for documents using Gemini",
   "private": true,
   "type": "module",
