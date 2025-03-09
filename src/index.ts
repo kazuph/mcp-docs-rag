@@ -465,8 +465,8 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
   return {
     prompts: [
       {
-        name: "summarize_collection",
-        description: "Summarize a document collection",
+        name: "guide_documents_usage",
+        description: "Guide on how to use document collections and RAG functionality",
       }
     ]
   };
@@ -476,7 +476,7 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
  * Handler for getting a prompt
  */
 server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-  if (request.params.name !== "summarize_collection") {
+  if (request.params.name !== "guide_documents_usage") {
     throw new Error("Unknown prompt");
   }
 
@@ -488,11 +488,11 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
         role: "user",
         content: {
           type: "text",
-          text: "Please list the available document collections and summarize how to use the RAG functionality."
+          text: "Please list the available document collections and guide on how to use the RAG functionality."
         }
       },
       {
-        role: "user",
+        role: "assistant",
         content: {
           type: "text",
           text: `Available document collections:\n${collections.map(c => `- ${c.name}: ${c.description}`).join('\n')}\n\nUse the 'rag_query' tool to ask questions about these documents.`

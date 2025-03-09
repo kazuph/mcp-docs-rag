@@ -12,6 +12,9 @@ This is a TypeScript-based MCP server that implements a RAG system for documents
 - Plain text mime type for content access
 
 ### Tools
+- `list_documents` - List all available documents in the DOCS_PATH directory
+  - Returns a formatted list of all document collections
+  - Shows total number of available documents
 - `rag_query` - Query document collections using RAG
   - Takes collection_id and query as parameters
   - Returns AI-generated responses with context from documents
@@ -23,7 +26,7 @@ This is a TypeScript-based MCP server that implements a RAG system for documents
   - Uses wget to download file
 
 ### Prompts
-- `summarize_collection` - List available document collections
+- `guide_documents_usage` - Guide on how to use document collections and RAG functionality
   - Includes list of available document collections
   - Provides usage hints for RAG functionality
 
