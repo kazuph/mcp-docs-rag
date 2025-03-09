@@ -54,7 +54,7 @@ if (!fs.existsSync(INDICES_PATH)) {
   fs.mkdirSync(INDICES_PATH, { recursive: true });
 }
 
-// Store indices for each document collection
+// Store indices for each document
 const indices: Record<string, { index: VectorStoreIndex, description: string }> = {};
 
 /**
@@ -66,10 +66,10 @@ function normalizeRepoName(repoUrl: string): string {
 }
 
 /**
- * Lists all available document collections in the docs directory
+ * Lists all available documents in the docs directory
  */
-async function listDocumentCollections(): Promise<Array<{ id: string, name: string, path: string, description: string }>> {
-  const collections: Array<{ id: string, name: string, path: string, description: string }> = [];
+async function listDocuments(): Promise<Array<{ id: string, name: string, path: string, description: string }>> {
+  const documents: Array<{ id: string, name: string, path: string, description: string }> = [];
   
   const entries = fs.readdirSync(DOCS_PATH, { withFileTypes: true });
   
@@ -78,7 +78,7 @@ async function listDocumentCollections(): Promise<Array<{ id: string, name: stri
     
     const entryPath = path.join(DOCS_PATH, entry.name);
     
-    // Gitリポジトリかテキストファイルコレクションかを判断
+    // Gitリポジトリかテキストファイルかを判断
     let isGitRepo = false;
     try {
       // .gitディレクトリが存在するか確認
@@ -94,14 +94,14 @@ async function listDocumentCollections(): Promise<Array<{ id: string, name: stri
     const hasIndexFile = fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
     
     if (isGitRepo) {
-      collections.push({
+      documents.push({
         id: entry.name,
         name: entry.name,
         path: entryPath,
         description: `Git repository: ${entry.name}`,
       });
     } else if (hasIndexFile) {
-      collections.push({
+      documents.push({
         id: entry.name,
         name: entry.name,
         path: indexPath,
@@ -110,7 +110,7 @@ async function listDocumentCollections(): Promise<Array<{ id: string, name: stri
     }
   }
   
-  return collections;
+  return documents;
 }
 
 /**
@@ -153,62 +153,62 @@ async function readDirectoryRecursively(dirPath: string): Promise<Document[]> {
 }
 
 /**
- * Load and index a document collection
- * 存在しないコレクションの場合は自動的に作成を試みる
+ * Load and index a document
+ * 存在しないドキュメントの場合は自動的に作成を試みる
  */
-async function loadDocumentCollection(collectionId: string): Promise<VectorStoreIndex> {
-  if (indices[collectionId]?.index) {
-    return indices[collectionId].index;
+async function loadDocument(documentId: string): Promise<VectorStoreIndex> {
+  if (indices[documentId]?.index) {
+    return indices[documentId].index;
   }
 
-  let collections = await listDocumentCollections();
-  let collection = collections.find(c => c.id === collectionId);
+  let documents = await listDocuments();
+  let document = documents.find(c => c.id === documentId);
   
-  // 特定のコレクションが存在しない場合、自動的に作成を試みる
-  if (!collection) {
-    console.log(`Document collection not found: ${collectionId}, trying to create it automatically`);
+  // 特定のドキュメントが存在しない場合、自動的に作成を試みる
+  if (!document) {
+    console.log(`Document not found: ${documentId}, trying to create it automatically`);
     
     try {
       // hono-docsの場合はHonoドキュメントを自動的にクローン
-      if (collectionId === 'hono-docs') {
+      if (documentId === 'hono-docs') {
         const repoName = await cloneRepository('https://github.com/honojs/hono.git', 'docs', 'hono-docs');
         console.log(`Successfully cloned Hono documentation as ${repoName}`);
-        // コレクションリストを更新
-        collections = await listDocumentCollections();
-        collection = collections.find(c => c.id === collectionId);
+        // ドキュメントリストを更新
+        documents = await listDocuments();
+        document = documents.find(c => c.id === documentId);
       } else {
-        // その他のコレクションの場合はエラーをスロー
-        throw new Error(`Document collection not found: ${collectionId}`);
+        // その他のドキュメントの場合はエラーをスロー
+        throw new Error(`Document not found: ${documentId}`);
       }
     } catch (error: any) {
-      console.error(`Failed to create collection ${collectionId}:`, error.message);
-      throw new Error(`Failed to create document collection: ${collectionId}`);
+      console.error(`Failed to create document ${documentId}:`, error.message);
+      throw new Error(`Failed to create document: ${documentId}`);
     }
     
     // 作成してもなお存在しない場合はエラー
-    if (!collection) {
-      throw new Error(`Document collection not found after creation attempt: ${collectionId}`);
+    if (!document) {
+      throw new Error(`Document not found after creation attempt: ${documentId}`);
     }
   }
 
-  let documents: Document[] = [];
+  let documentItems: Document[] = [];
   
-  if (fs.statSync(collection.path).isDirectory()) {
+  if (fs.statSync(document.path).isDirectory()) {
     // ディレクトリを再帰的に処理
-    documents = await readDirectoryRecursively(collection.path);
+    documentItems = await readDirectoryRecursively(document.path);
     
     // 空のドキュメントリストの場合にフォールバックメッセージを追加
-    if (documents.length === 0) {
-      console.warn(`No documents found in collection: ${collectionId}`);
-      documents.push(new Document({ 
-        text: `This collection (${collection.name}) appears to be empty. Please check if files exist at path: ${collection.path}`, 
-        metadata: { name: 'empty-notice', source: collection.path } 
+    if (documentItems.length === 0) {
+      console.warn(`No documents found in document: ${documentId}`);
+      documentItems.push(new Document({ 
+        text: `This document (${document.name}) appears to be empty. Please check if files exist at path: ${document.path}`, 
+        metadata: { name: 'empty-notice', source: document.path } 
       }));
     }
   } else {
     // Process single file
-    const text = fs.readFileSync(collection.path, 'utf-8');
-    documents = [new Document({ text, metadata: { name: collection.id, source: collection.path } })];
+    const text = fs.readFileSync(document.path, 'utf-8');
+    documentItems = [new Document({ text, metadata: { name: document.id, source: document.path } })];
   }
   
   // 一時的にGemini埋め込みモデルを設定
@@ -221,11 +221,11 @@ async function loadDocumentCollection(collectionId: string): Promise<VectorStore
   
   // Create storage context
   const storageContext = await storageContextFromDefaults({
-    persistDir: path.join(DOCS_PATH, '.indices', collectionId),
+    persistDir: path.join(DOCS_PATH, '.indices', documentId),
   });
   
   // Create index
-  const index = await VectorStoreIndex.fromDocuments(documents, {
+  const index = await VectorStoreIndex.fromDocuments(documentItems, {
     storageContext,
   });
   
@@ -233,9 +233,9 @@ async function loadDocumentCollection(collectionId: string): Promise<VectorStore
   Settings.embedModel = originalEmbedModel;
   
   // Save index for future use
-  indices[collectionId] = { 
+  indices[documentId] = { 
     index, 
-    description: collection.description 
+    description: document.description 
   };
   
   return index;
@@ -245,7 +245,7 @@ async function loadDocumentCollection(collectionId: string): Promise<VectorStore
  * Clone a git repository to the docs directory
  * @param repoUrl URL of the Git repository to clone
  * @param subdirectory Optional specific subdirectory to sparse checkout
- * @param documentName Optional custom name for the document collection
+ * @param documentName Optional custom name for the document
  */
 async function cloneRepository(repoUrl: string, subdirectory?: string, documentName?: string): Promise<string> {
   // Use custom document name if provided, otherwise normalize repo name
@@ -324,47 +324,47 @@ const server = new Server(
 );
 
 /**
- * Handler for listing available document collections as resources
+ * Handler for listing available documents as resources
  */
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
-  const collections = await listDocumentCollections();
+  const documents = await listDocuments();
   
   return {
-    resources: collections.map(collection => ({
-      uri: `docs:///${collection.id}`,
+    resources: documents.map(document => ({
+      uri: `docs:///${document.id}`,
       mimeType: "text/plain",
-      name: collection.name,
-      description: collection.description
+      name: document.name,
+      description: document.description
     }))
   };
 });
 
 /**
- * Handler for reading a document collection
+ * Handler for reading a document
  */
 server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const url = new URL(request.params.uri);
-  const collectionId = url.pathname.replace(/^\//, '');
+  const documentId = url.pathname.replace(/^\//, '');
   
-  const collections = await listDocumentCollections();
-  const collection = collections.find(c => c.id === collectionId);
+  const documents = await listDocuments();
+  const document = documents.find(c => c.id === documentId);
   
-  if (!collection) {
-    throw new Error(`Document collection not found: ${collectionId}`);
+  if (!document) {
+    throw new Error(`Document not found: ${documentId}`);
   }
   
   let content: string;
   
-  if (fs.statSync(collection.path).isDirectory()) {
+  if (fs.statSync(document.path).isDirectory()) {
     // List files in directory
-    const files = fs.readdirSync(collection.path, { withFileTypes: true })
+    const files = fs.readdirSync(document.path, { withFileTypes: true })
       .filter(entry => entry.isFile())
       .map(entry => entry.name);
     
-    content = `Repository: ${collection.name}\n\nFiles:\n${files.join('\n')}`;
+    content = `Repository: ${document.name}\n\nFiles:\n${files.join('\n')}`;
   } else {
     // Read file content
-    content = fs.readFileSync(collection.path, 'utf-8');
+    content = fs.readFileSync(document.path, 'utf-8');
   }
   
   return {
@@ -392,20 +392,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "rag_query",
-        description: "Query a document collection using RAG. Note: If the index does not exist, it will be created when you query, which may take some time.",
+        description: "Query a document using RAG. Note: If the index does not exist, it will be created when you query, which may take some time.",
         inputSchema: {
           type: "object",
           properties: {
-            collection_id: {
+            document_id: {
               type: "string",
-              description: "ID of the document collection to query"
+              description: "ID of the document to query"
             },
             query: {
               type: "string",
-              description: "Query to run against the document collection"
+              description: "Query to run against the document"
             }
           },
-          required: ["collection_id", "query"]
+          required: ["document_id", "query"]
         }
       },
       {
@@ -420,7 +420,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             document_name: {
               type: "string",
-              description: "Optional: Custom name for the document collection (defaults to repository name). Use a simple, descriptive name without '-docs' suffix. For example, use 'react' instead of 'react-docs'."
+              description: "Optional: Custom name for the document (defaults to repository name). Use a simple, descriptive name without '-docs' suffix. For example, use 'react' instead of 'react-docs'."
             },
             subdirectory: {
               type: "string",
@@ -458,53 +458,53 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   switch (request.params.name) {
     case "list_documents": {
-      const collections = await listDocumentCollections();
+      const documents = await listDocuments();
       
       // ドキュメントの情報を整形
-      const documentsList = collections.map(collection => {
-        return `- ${collection.name}: ${collection.description}`;
+      const documentsList = documents.map(document => {
+        return `- ${document.name}: ${document.description}`;
       }).join('\n');
       
       return {
         content: [{
           type: "text",
-          text: `Available documents in ${DOCS_PATH}:\n\n${documentsList}\n\nTotal documents: ${collections.length}`
+          text: `Available documents in ${DOCS_PATH}:\n\n${documentsList}\n\nTotal documents: ${documents.length}`
         }]
       };
     }
     
     case "rag_query": {
-      const collectionId = String(request.params.arguments?.collection_id);
+      const documentId = String(request.params.arguments?.document_id);
       const query = String(request.params.arguments?.query);
       
-      if (!collectionId || !query) {
-        throw new Error("Collection ID and query are required");
+      if (!documentId || !query) {
+        throw new Error("Document ID and query are required");
       }
       
       try {
-        // コレクションが存在するか確認し、存在しなければ自動的に作成を試みる
-        let collections = await listDocumentCollections();
-        let collection = collections.find(c => c.id === collectionId);
+        // ドキュメントが存在するか確認し、存在しなければ自動的に作成を試みる
+        let documents = await listDocuments();
+        let document = documents.find(c => c.id === documentId);
         
-        if (!collection) {
-          console.log(`Collection not found: ${collectionId}, trying to create it automatically`);
+        if (!document) {
+          console.log(`Document not found: ${documentId}, trying to create it automatically`);
           
           // hono-docsの場合はHonoドキュメントを自動的にクローン
-          if (collectionId === 'hono-docs') {
+          if (documentId === 'hono-docs') {
             const repoName = await cloneRepository('https://github.com/honojs/hono.git', 'docs', 'hono-docs');
             console.log(`Successfully cloned Hono documentation as ${repoName}`);
           } else {
             return {
               content: [{
                 type: "text",
-                text: `Collection '${collectionId}' not found. For 'hono-docs', the system will automatically clone the Hono documentation. For other collections, please add them manually using add_git_repository or add_text_file tools.`
+                text: `Document '${documentId}' not found. For 'hono-docs', the system will automatically clone the Hono documentation. For other documents, please add them manually using add_git_repository or add_text_file tools.`
               }]
             };
           }
         }
         
-        // Load and index document collection if needed
-        const index = await loadDocumentCollection(collectionId);
+        // Load and index document if needed
+        const index = await loadDocument(documentId);
       
       // 一時的にGemini LLMを設定
       const originalLLM = Settings.llm;
@@ -568,7 +568,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return {
         content: [{
           type: "text",
-          text: `${responseText}. The index will be created when you query this collection for the first time.`
+          text: `${responseText}. The index will be created when you query this document for the first time.`
         }]
       };
     }
@@ -590,7 +590,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return {
         content: [{
           type: "text",
-          text: `Added document '${docName}' with content from ${fileUrl}. The index will be created when you query this collection for the first time.`
+          text: `Added document '${docName}' with content from ${fileUrl}. The index will be created when you query this document for the first time.`
         }]
       };
     }
@@ -608,7 +608,7 @@ server.setRequestHandler(ListPromptsRequestSchema, async () => {
     prompts: [
       {
         name: "guide_documents_usage",
-        description: "Guide on how to use document collections and RAG functionality",
+        description: "Guide on how to use documents and RAG functionality",
       }
     ]
   };
@@ -622,7 +622,7 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
     throw new Error("Unknown prompt");
   }
 
-  const collections = await listDocumentCollections();
+  const documents = await listDocuments();
   
   return {
     messages: [
@@ -630,14 +630,14 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
         role: "user",
         content: {
           type: "text",
-          text: "Please list the available document collections and guide on how to use the RAG functionality."
+          text: "Please list the available documents and guide on how to use the RAG functionality."
         }
       },
       {
         role: "assistant",
         content: {
           type: "text",
-          text: `Available document collections:\n${collections.map(c => `- ${c.name}: ${c.description}`).join('\n')}\n\nUse the 'rag_query' tool to ask questions about these documents.`
+          text: `Available documents:\n${documents.map(c => `- ${c.name}: ${c.description}`).join('\n')}\n\nUse the 'rag_query' tool to ask questions about these documents.`
         }
       }
     ]

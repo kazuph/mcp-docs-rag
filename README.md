@@ -7,20 +7,20 @@ This is a TypeScript-based MCP server that implements a RAG system for documents
 ## Features
 
 ### Resources
-- List and access document collections via `docs://` URIs
+- List and access documents via `docs://` URIs
 - Documents can be Git repositories or text files
 - Plain text mime type for content access
 
 ### Tools
 - `list_documents` - List all available documents in the DOCS_PATH directory
-  - Returns a formatted list of all document collections
+  - Returns a formatted list of all documents
   - Shows total number of available documents
-- `rag_query` - Query document collections using RAG
-  - Takes collection_id and query as parameters
+- `rag_query` - Query documents using RAG
+  - Takes document_id and query as parameters
   - Returns AI-generated responses with context from documents
 - `add_git_repository` - Clone a Git repository to the docs directory with optional sparse checkout
   - Takes repository_url as parameter
-  - Optional document_name parameter to customize the name of the document collection (use simple descriptive names without '-docs' suffix)
+  - Optional document_name parameter to customize the name of the document (use simple descriptive names without '-docs' suffix)
   - Optional subdirectory parameter for sparse checkout of specific directories
   - Automatically pulls latest changes if repository already exists
 - `add_text_file` - Download a text file to the docs directory
@@ -28,8 +28,8 @@ This is a TypeScript-based MCP server that implements a RAG system for documents
   - Uses wget to download file
 
 ### Prompts
-- `guide_documents_usage` - Guide on how to use document collections and RAG functionality
-  - Includes list of available document collections
+- `guide_documents_usage` - Guide on how to use documents and RAG functionality
+  - Includes list of available documents
   - Provides usage hints for RAG functionality
 
 ## Development
@@ -59,7 +59,7 @@ The documents directory can contain:
 - Git repositories (cloned directories)
 - Plain text files (with .txt extension)
 
-Each document collection is indexed separately using llama-index.ts with Google's Gemini embeddings.
+Each document is indexed separately using llama-index.ts with Google's Gemini embeddings.
 
 ### API Keys
 
