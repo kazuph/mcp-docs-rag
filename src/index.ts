@@ -114,6 +114,45 @@ async function listDocumentCollections(): Promise<Array<{ id: string, name: stri
 }
 
 /**
+ * ディレクトリ内のファイルを再帰的に読み込む関数
+ * @param dirPath 対象ディレクトリのパス
+ * @returns ドキュメントの配列
+ */
+async function readDirectoryRecursively(dirPath: string): Promise<Document[]> {
+  const result: Document[] = [];
+  const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dirPath, entry.name);
+    
+    if (entry.isDirectory()) {
+      // サブディレクトリを再帰的に処理
+      const subdirDocs = await readDirectoryRecursively(fullPath);
+      result.push(...subdirDocs);
+    } else if (entry.isFile() && !entry.name.startsWith('.')) {
+      // ファイルを処理
+      try {
+        const content = fs.readFileSync(fullPath, 'utf-8');
+        // ファイルの相対パスを保存（DOCS_PATHからの相対パス）
+        const relativePath = path.relative(DOCS_PATH, fullPath);
+        result.push(new Document({ 
+          text: content, 
+          metadata: { 
+            name: entry.name, 
+            source: fullPath,
+            path: relativePath
+          } 
+        }));
+      } catch (error: any) {
+        console.warn(`Failed to read file ${fullPath}: ${error.message}`);
+      }
+    }
+  }
+  
+  return result;
+}
+
+/**
  * Load and index a document collection
  */
 async function loadDocumentCollection(collectionId: string): Promise<VectorStoreIndex> {
@@ -131,15 +170,16 @@ async function loadDocumentCollection(collectionId: string): Promise<VectorStore
   let documents: Document[] = [];
   
   if (fs.statSync(collection.path).isDirectory()) {
-    // Process directory - manually read files
-    const files = fs.readdirSync(collection.path, { withFileTypes: true });
+    // ディレクトリを再帰的に処理
+    documents = await readDirectoryRecursively(collection.path);
     
-    for (const file of files) {
-      if (file.isFile() && !file.name.startsWith('.')) {
-        const filePath = path.join(collection.path, file.name);
-        const content = fs.readFileSync(filePath, 'utf-8');
-        documents.push(new Document({ text: content, metadata: { name: file.name, source: filePath } }));
-      }
+    // 空のドキュメントリストの場合にフォールバックメッセージを追加
+    if (documents.length === 0) {
+      console.warn(`No documents found in collection: ${collectionId}`);
+      documents.push(new Document({ 
+        text: `This collection (${collection.name}) appears to be empty. Please check if files exist at path: ${collection.path}`, 
+        metadata: { name: 'empty-notice', source: collection.path } 
+      }));
     }
   } else {
     // Process single file
@@ -181,9 +221,11 @@ async function loadDocumentCollection(collectionId: string): Promise<VectorStore
  * Clone a git repository to the docs directory
  * @param repoUrl URL of the Git repository to clone
  * @param subdirectory Optional specific subdirectory to sparse checkout
+ * @param documentName Optional custom name for the document collection
  */
-async function cloneRepository(repoUrl: string, subdirectory?: string): Promise<string> {
-  const repoName = normalizeRepoName(repoUrl);
+async function cloneRepository(repoUrl: string, subdirectory?: string, documentName?: string): Promise<string> {
+  // Use custom document name if provided, otherwise normalize repo name
+  const repoName = documentName || normalizeRepoName(repoUrl);
   const repoPath = path.join(DOCS_PATH, repoName);
   
   // Check if repository already exists
@@ -352,6 +394,10 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
               type: "string",
               description: "URL of the git repository to clone"
             },
+            document_name: {
+              type: "string",
+              description: "Optional: Custom name for the document collection (defaults to repository name). Use a simple, descriptive name without '-docs' suffix. For example, use 'react' instead of 'react-docs'."
+            },
             subdirectory: {
               type: "string",
               description: "Optional: Specific subdirectory to sparse checkout (e.g. 'path/to/specific/dir'). This uses Git's sparse-checkout feature to only download the specified directory."
@@ -445,19 +491,29 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     case "add_git_repository": {
       const repositoryUrl = String(request.params.arguments?.repository_url);
       const subdirectory = request.params.arguments?.subdirectory ? String(request.params.arguments?.subdirectory) : undefined;
+      const documentName = request.params.arguments?.document_name ? String(request.params.arguments?.document_name) : undefined;
       
       if (!repositoryUrl) {
         throw new Error("Repository URL is required");
       }
       
-      const repoName = await cloneRepository(repositoryUrl, subdirectory);
+      const repoName = await cloneRepository(repositoryUrl, subdirectory, documentName);
+      
+      // Prepare response message with appropriate details
+      let responseText = `Added git repository: ${repoName}`;
+      
+      if (subdirectory) {
+        responseText += ` (sparse checkout of '${subdirectory}')`;  
+      }
+      
+      if (documentName) {
+        responseText += ` with custom name '${documentName}'`;  
+      }
       
       return {
         content: [{
           type: "text",
-          text: subdirectory 
-            ? `Added git repository: ${repoName} (sparse checkout of '${subdirectory}')`
-            : `Added git repository: ${repoName}`
+          text: responseText
         }]
       };
     }

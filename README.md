@@ -20,6 +20,7 @@ This is a TypeScript-based MCP server that implements a RAG system for documents
   - Returns AI-generated responses with context from documents
 - `add_git_repository` - Clone a Git repository to the docs directory with optional sparse checkout
   - Takes repository_url as parameter
+  - Optional document_name parameter to customize the name of the document collection (use simple descriptive names without '-docs' suffix)
   - Optional subdirectory parameter for sparse checkout of specific directories
   - Automatically pulls latest changes if repository already exists
 - `add_text_file` - Download a text file to the docs directory
@@ -113,11 +114,19 @@ Once configured, you can use the server with Claude to:
    ```
    Add a new document from GitHub: https://github.com/username/repository
    ```
+   or with a custom document name:
+   ```
+   Add GitHub repository https://github.com/username/repository-name and name it 'framework'
+   ```
    or with sparse checkout of a specific directory:
    ```
    Add only the 'src/components' directory from https://github.com/username/repository
    ```
-   or
+   or combine custom name and sparse checkout:
+   ```
+   Add the 'examples/demo' directory from https://github.com/username/large-repo and name it 'demo-app'
+   ```
+   or add a text file:
    ```
    Add this text file: https://example.com/document.txt
    ```
