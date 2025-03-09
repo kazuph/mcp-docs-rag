@@ -179,8 +179,10 @@ async function loadDocumentCollection(collectionId: string): Promise<VectorStore
 
 /**
  * Clone a git repository to the docs directory
+ * @param repoUrl URL of the Git repository to clone
+ * @param subdirectory Optional specific subdirectory to sparse checkout
  */
-async function cloneRepository(repoUrl: string): Promise<string> {
+async function cloneRepository(repoUrl: string, subdirectory?: string): Promise<string> {
   const repoName = normalizeRepoName(repoUrl);
   const repoPath = path.join(DOCS_PATH, repoName);
   
@@ -188,9 +190,25 @@ async function cloneRepository(repoUrl: string): Promise<string> {
   if (fs.existsSync(repoPath)) {
     // Pull latest changes
     await execAsync(`cd "${repoPath}" && git pull`);
+    
+    // If subdirectory is specified, make sure it's in the sparse-checkout
+    if (subdirectory) {
+      await execAsync(`cd "${repoPath}" && git sparse-checkout set ${subdirectory}`);
+    }
   } else {
-    // Clone repository
-    await execAsync(`cd "${DOCS_PATH}" && git clone ${repoUrl}`);
+    if (subdirectory) {
+      // Clone with sparse-checkout for specific subdirectory
+      await execAsync(`mkdir -p "${repoPath}" && cd "${repoPath}" && \
+                      git init && \
+                      git remote add origin ${repoUrl} && \
+                      git config core.sparseCheckout true && \
+                      git config --local core.autocrlf false && \
+                      echo "${subdirectory}/*" >> .git/info/sparse-checkout && \
+                      git pull --depth=1 origin main || git pull --depth=1 origin master`);
+    } else {
+      // Normal clone for the entire repository
+      await execAsync(`cd "${DOCS_PATH}" && git clone ${repoUrl}`);
+    }
   }
   
   return repoName;
@@ -326,13 +344,17 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "add_git_repository",
-        description: "Add a git repository to the docs directory",
+        description: "Add a git repository to the docs directory with optional sparse checkout",
         inputSchema: {
           type: "object",
           properties: {
             repository_url: {
               type: "string",
               description: "URL of the git repository to clone"
+            },
+            subdirectory: {
+              type: "string",
+              description: "Optional: Specific subdirectory to sparse checkout (e.g. 'path/to/specific/dir'). This uses Git's sparse-checkout feature to only download the specified directory."
             }
           },
           required: ["repository_url"]
@@ -422,17 +444,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     
     case "add_git_repository": {
       const repositoryUrl = String(request.params.arguments?.repository_url);
+      const subdirectory = request.params.arguments?.subdirectory ? String(request.params.arguments?.subdirectory) : undefined;
       
       if (!repositoryUrl) {
         throw new Error("Repository URL is required");
       }
       
-      const repoName = await cloneRepository(repositoryUrl);
+      const repoName = await cloneRepository(repositoryUrl, subdirectory);
       
       return {
         content: [{
           type: "text",
-          text: `Added git repository: ${repoName}`
+          text: subdirectory 
+            ? `Added git repository: ${repoName} (sparse checkout of '${subdirectory}')`
+            : `Added git repository: ${repoName}`
         }]
       };
     }
