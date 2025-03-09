@@ -392,7 +392,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "rag_query",
-        description: "Query a document collection using RAG",
+        description: "Query a document collection using RAG. Note: If the index does not exist, it will be created when you query, which may take some time.",
         inputSchema: {
           type: "object",
           properties: {
@@ -410,7 +410,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "add_git_repository",
-        description: "Add a git repository to the docs directory with optional sparse checkout",
+        description: "Add a git repository to the docs directory with optional sparse checkout. Please do not use 'docs' in the document name.",
         inputSchema: {
           type: "object",
           properties: {
@@ -432,7 +432,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
       },
       {
         name: "add_text_file",
-        description: "Add a text file to the docs directory with a specified name",
+        description: "Add a text file to the docs directory with a specified name. Please do not use 'docs' in the document name.",
         inputSchema: {
           type: "object",
           properties: {
@@ -568,7 +568,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return {
         content: [{
           type: "text",
-          text: responseText
+          text: `${responseText}. The index will be created when you query this collection for the first time.`
         }]
       };
     }
@@ -590,7 +590,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return {
         content: [{
           type: "text",
-          text: `Added document '${docName}' with content from ${fileUrl}`
+          text: `Added document '${docName}' with content from ${fileUrl}. The index will be created when you query this collection for the first time.`
         }]
       };
     }
