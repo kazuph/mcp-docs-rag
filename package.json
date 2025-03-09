@@ -1,7 +1,7 @@
 {
   "name": "mcp-docs-rag",
   "version": "0.1.0",
-  "description": "rag documents",
+  "description": "RAG (Retrieval-Augmented Generation) MCP server for documents using Gemini",
   "private": true,
   "type": "module",
   "bin": {
@@ -10,6 +10,25 @@
   "files": [
     "build"
   ],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "rag",
+    "documents",
+    "gemini",
+    "llamaindex"
+  ],
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "mcp": {
+    "serverType": "docs-rag",
+    "apiKeyRequirements": ["GEMINI_API_KEY"],
+    "environmentVariables": {
+      "DOCS_PATH": "Path to documents directory"
+    },
+    "capabilities": ["rag", "documentManagement"]
+  },
   "scripts": {
     "build": "tsc && node -e \"require('fs').chmodSync('build/index.js', '755')\"",
     "prepare": "npm run build",
@@ -17,7 +36,9 @@
     "inspector": "npx @modelcontextprotocol/inspector build/index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "0.6.0"
+    "@llamaindex/google": "^0.1.0",
+    "@modelcontextprotocol/sdk": "0.6.0",
+    "llamaindex": "^0.9.9"
   },
   "devDependencies": {
     "@types/node": "^20.11.24",

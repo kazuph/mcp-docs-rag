@@ -1,12 +1,11 @@
 #!/usr/bin/env node
 
 /**
- * This is a template MCP server that implements a simple notes system.
- * It demonstrates core MCP concepts like resources and tools by allowing:
- * - Listing notes as resources
- * - Reading individual notes
- * - Creating new notes via a tool
- * - Summarizing all notes via a prompt
+ * MCP server that implements RAG functionality for documents in ~/docs directory.
+ * Features:
+ * - List available documents as resources
+ * - Read and query documents using RAG
+ * - Add new documents via git clone or wget
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
@@ -19,24 +18,206 @@ import {
   ListPromptsRequestSchema,
   GetPromptRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
+import fs from "fs";
+import path from "path";
+import { fileURLToPath } from "url";
+import { exec } from "child_process";
+import { promisify } from "util";
+import {
+  VectorStoreIndex,
+  Document,
+  storageContextFromDefaults,
+  SimpleVectorStore,
+  CallbackManager,
+  Settings
+} from "llamaindex";
+import { Gemini, GEMINI_MODEL, GeminiEmbedding } from "@llamaindex/google";
+
+const execAsync = promisify(exec);
+
+// GEMINI_API_KEYをGOOGLE_API_KEYにマッピング（ライブラリが自動的に取得するため）
+if (process.env.GEMINI_API_KEY && !process.env.GOOGLE_API_KEY) {
+  process.env.GOOGLE_API_KEY = process.env.GEMINI_API_KEY;
+}
+
+// Get docs path from environment variable, with fallback
+const DOCS_PATH = process.env.DOCS_PATH || path.join(process.env.HOME || process.env.USERPROFILE || '', 'docs');
+
+// Ensure docs directory exists
+if (!fs.existsSync(DOCS_PATH)) {
+  fs.mkdirSync(DOCS_PATH, { recursive: true });
+}
+
+// Store indices for each document collection
+const indices: Record<string, { index: VectorStoreIndex, description: string }> = {};
 
 /**
- * Type alias for a note object.
+ * Normalizes a repository name from its URL or path
  */
-type Note = { title: string, content: string };
+function normalizeRepoName(repoUrl: string): string {
+  const parts = repoUrl.split('/');
+  return parts[parts.length - 1].replace('.git', '');
+}
 
 /**
- * Simple in-memory storage for notes.
- * In a real implementation, this would likely be backed by a database.
+ * Lists all available document collections in the docs directory
  */
-const notes: { [id: string]: Note } = {
-  "1": { title: "First Note", content: "This is note 1" },
-  "2": { title: "Second Note", content: "This is note 2" }
-};
+async function listDocumentCollections(): Promise<Array<{ id: string, name: string, path: string, description: string }>> {
+  const collections: Array<{ id: string, name: string, path: string, description: string }> = [];
+  
+  const entries = fs.readdirSync(DOCS_PATH, { withFileTypes: true });
+  
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
+    
+    const entryPath = path.join(DOCS_PATH, entry.name);
+    
+    // Gitリポジトリかテキストファイルコレクションかを判断
+    let isGitRepo = false;
+    try {
+      // .gitディレクトリが存在するか確認
+      const gitPath = path.join(entryPath, '.git');
+      isGitRepo = fs.existsSync(gitPath) && fs.statSync(gitPath).isDirectory();
+    } catch (error) {
+      // エラーが発生した場合はGitリポジトリではない
+      isGitRepo = false;
+    }
+    
+    // index.txtファイルがあるか確認
+    const indexPath = path.join(entryPath, 'index.txt');
+    const hasIndexFile = fs.existsSync(indexPath) && fs.statSync(indexPath).isFile();
+    
+    if (isGitRepo) {
+      collections.push({
+        id: entry.name,
+        name: entry.name,
+        path: entryPath,
+        description: `Git repository: ${entry.name}`,
+      });
+    } else if (hasIndexFile) {
+      collections.push({
+        id: entry.name,
+        name: entry.name,
+        path: indexPath,
+        description: `Text document: ${entry.name}`,
+      });
+    }
+  }
+  
+  return collections;
+}
 
 /**
- * Create an MCP server with capabilities for resources (to list/read notes),
- * tools (to create new notes), and prompts (to summarize notes).
+ * Load and index a document collection
+ */
+async function loadDocumentCollection(collectionId: string): Promise<VectorStoreIndex> {
+  if (indices[collectionId]?.index) {
+    return indices[collectionId].index;
+  }
+
+  const collections = await listDocumentCollections();
+  const collection = collections.find(c => c.id === collectionId);
+  
+  if (!collection) {
+    throw new Error(`Document collection not found: ${collectionId}`);
+  }
+
+  let documents: Document[] = [];
+  
+  if (fs.statSync(collection.path).isDirectory()) {
+    // Process directory - manually read files
+    const files = fs.readdirSync(collection.path, { withFileTypes: true });
+    
+    for (const file of files) {
+      if (file.isFile() && !file.name.startsWith('.')) {
+        const filePath = path.join(collection.path, file.name);
+        const content = fs.readFileSync(filePath, 'utf-8');
+        documents.push(new Document({ text: content, metadata: { name: file.name, source: filePath } }));
+      }
+    }
+  } else {
+    // Process single file
+    const text = fs.readFileSync(collection.path, 'utf-8');
+    documents = [new Document({ text, metadata: { name: collection.id, source: collection.path } })];
+  }
+  
+  // 一時的にGemini埋め込みモデルを設定
+  const originalEmbedModel = Settings.embedModel;
+  // GeminiEmbeddingはデフォルトでgemini-proモデルを使用
+  const geminiEmbed = new GeminiEmbedding();
+  
+  // グローバル設定に設定
+  Settings.embedModel = geminiEmbed;
+  
+  // Create storage context
+  const storageContext = await storageContextFromDefaults({
+    persistDir: path.join(DOCS_PATH, '.indices', collectionId),
+  });
+  
+  // Create index
+  const index = await VectorStoreIndex.fromDocuments(documents, {
+    storageContext,
+  });
+  
+  // 元の設定に戻す
+  Settings.embedModel = originalEmbedModel;
+  
+  // Save index for future use
+  indices[collectionId] = { 
+    index, 
+    description: collection.description 
+  };
+  
+  return index;
+}
+
+/**
+ * Clone a git repository to the docs directory
+ */
+async function cloneRepository(repoUrl: string): Promise<string> {
+  const repoName = normalizeRepoName(repoUrl);
+  const repoPath = path.join(DOCS_PATH, repoName);
+  
+  // Check if repository already exists
+  if (fs.existsSync(repoPath)) {
+    // Pull latest changes
+    await execAsync(`cd "${repoPath}" && git pull`);
+  } else {
+    // Clone repository
+    await execAsync(`cd "${DOCS_PATH}" && git clone ${repoUrl}`);
+  }
+  
+  return repoName;
+}
+
+/**
+ * Download a file from URL to the docs directory
+ * @param fileUrl ダウンロードするファイルのURL
+ * @param documentName ドキュメント名（ディレクトリ名として使用）
+ */
+async function downloadFile(fileUrl: string, documentName: string): Promise<string> {
+  // ドキュメント用のディレクトリを作成
+  const docDir = path.join(DOCS_PATH, documentName);
+  
+  // ディレクトリが存在しない場合は作成
+  if (!fs.existsSync(docDir)) {
+    fs.mkdirSync(docDir, { recursive: true });
+  }
+  
+  // ファイル名を取得（URLのパス部分の最後）
+  const fileName = path.basename(fileUrl);
+  
+  // index.txtとしてファイルを保存
+  const filePath = path.join(docDir, 'index.txt');
+  
+  // ファイルをダウンロード
+  await execAsync(`cd "${docDir}" && wget -O "index.txt" ${fileUrl}`);
+  
+  return documentName;
+}
+
+/**
+ * Create MCP server
  */
 const server = new Server(
   {
@@ -53,68 +234,120 @@ const server = new Server(
 );
 
 /**
- * Handler for listing available notes as resources.
- * Each note is exposed as a resource with:
- * - A note:// URI scheme
- * - Plain text MIME type
- * - Human readable name and description (now including the note title)
+ * Handler for listing available document collections as resources
  */
 server.setRequestHandler(ListResourcesRequestSchema, async () => {
+  const collections = await listDocumentCollections();
+  
   return {
-    resources: Object.entries(notes).map(([id, note]) => ({
-      uri: `note:///${id}`,
+    resources: collections.map(collection => ({
+      uri: `docs:///${collection.id}`,
       mimeType: "text/plain",
-      name: note.title,
-      description: `A text note: ${note.title}`
+      name: collection.name,
+      description: collection.description
     }))
   };
 });
 
 /**
- * Handler for reading the contents of a specific note.
- * Takes a note:// URI and returns the note content as plain text.
+ * Handler for reading a document collection
  */
 server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
   const url = new URL(request.params.uri);
-  const id = url.pathname.replace(/^\//, '');
-  const note = notes[id];
-
-  if (!note) {
-    throw new Error(`Note ${id} not found`);
+  const collectionId = url.pathname.replace(/^\//, '');
+  
+  const collections = await listDocumentCollections();
+  const collection = collections.find(c => c.id === collectionId);
+  
+  if (!collection) {
+    throw new Error(`Document collection not found: ${collectionId}`);
   }
-
+  
+  let content: string;
+  
+  if (fs.statSync(collection.path).isDirectory()) {
+    // List files in directory
+    const files = fs.readdirSync(collection.path, { withFileTypes: true })
+      .filter(entry => entry.isFile())
+      .map(entry => entry.name);
+    
+    content = `Repository: ${collection.name}\n\nFiles:\n${files.join('\n')}`;
+  } else {
+    // Read file content
+    content = fs.readFileSync(collection.path, 'utf-8');
+  }
+  
   return {
     contents: [{
       uri: request.params.uri,
       mimeType: "text/plain",
-      text: note.content
+      text: content
     }]
   };
 });
 
 /**
- * Handler that lists available tools.
- * Exposes a single "create_note" tool that lets clients create new notes.
+ * Handler for listing available tools
  */
 server.setRequestHandler(ListToolsRequestSchema, async () => {
   return {
     tools: [
       {
-        name: "create_note",
-        description: "Create a new note",
+        name: "list_documents",
+        description: "List all available documents in the DOCS_PATH directory",
+        inputSchema: {
+          type: "object",
+          properties: {}
+        }
+      },
+      {
+        name: "rag_query",
+        description: "Query a document collection using RAG",
         inputSchema: {
           type: "object",
           properties: {
-            title: {
+            collection_id: {
               type: "string",
-              description: "Title of the note"
+              description: "ID of the document collection to query"
             },
-            content: {
+            query: {
               type: "string",
-              description: "Text content of the note"
+              description: "Query to run against the document collection"
             }
           },
-          required: ["title", "content"]
+          required: ["collection_id", "query"]
+        }
+      },
+      {
+        name: "add_git_repository",
+        description: "Add a git repository to the docs directory",
+        inputSchema: {
+          type: "object",
+          properties: {
+            repository_url: {
+              type: "string",
+              description: "URL of the git repository to clone"
+            }
+          },
+          required: ["repository_url"]
+        }
+      },
+      {
+        name: "add_text_file",
+        description: "Add a text file to the docs directory with a specified name",
+        inputSchema: {
+          type: "object",
+          properties: {
+            file_url: {
+              type: "string",
+              description: "URL of the text file to download"
+            },
+            document_name: {
+              type: "string",
+              description: "Name of the document (will be used as directory name)"
+            }
+          },
+          required: ["file_url", "document_name"]
         }
       }
     ]
@@ -122,85 +355,147 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 });
 
 /**
- * Handler for the create_note tool.
- * Creates a new note with the provided title and content, and returns success message.
+ * Handler for tool calls
  */
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   switch (request.params.name) {
-    case "create_note": {
-      const title = String(request.params.arguments?.title);
-      const content = String(request.params.arguments?.content);
-      if (!title || !content) {
-        throw new Error("Title and content are required");
-      }
-
-      const id = String(Object.keys(notes).length + 1);
-      notes[id] = { title, content };
-
+    case "list_documents": {
+      const collections = await listDocumentCollections();
+      
+      // ドキュメントの情報を整形
+      const documentsList = collections.map(collection => {
+        return `- ${collection.name}: ${collection.description}`;
+      }).join('\n');
+      
       return {
         content: [{
           type: "text",
-          text: `Created note ${id}: ${title}`
+          text: `Available documents in ${DOCS_PATH}:\n\n${documentsList}\n\nTotal documents: ${collections.length}`
         }]
       };
     }
-
+    
+    case "rag_query": {
+      const collectionId = String(request.params.arguments?.collection_id);
+      const query = String(request.params.arguments?.query);
+      
+      if (!collectionId || !query) {
+        throw new Error("Collection ID and query are required");
+      }
+      
+      // Load and index document collection if needed
+      const index = await loadDocumentCollection(collectionId);
+      
+      // 一時的にGemini LLMを設定
+      const originalLLM = Settings.llm;
+      const gemini = new Gemini({
+        model: GEMINI_MODEL.GEMINI_PRO
+      });
+      
+      // グローバル設定に設定
+      Settings.llm = gemini;
+      
+      // クエリエンジンの作成
+      const queryEngine = index.asQueryEngine();
+      
+      // クエリの実行
+      const response = await queryEngine.query({
+        query
+      });
+      
+      // 元の設定に戻す
+      Settings.llm = originalLLM;
+      
+      return {
+        content: [{
+          type: "text",
+          text: response.toString()
+        }]
+      };
+    }
+    
+    case "add_git_repository": {
+      const repositoryUrl = String(request.params.arguments?.repository_url);
+      
+      if (!repositoryUrl) {
+        throw new Error("Repository URL is required");
+      }
+      
+      const repoName = await cloneRepository(repositoryUrl);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `Added git repository: ${repoName}`
+        }]
+      };
+    }
+    
+    case "add_text_file": {
+      const fileUrl = String(request.params.arguments?.file_url);
+      const documentName = String(request.params.arguments?.document_name);
+      
+      if (!fileUrl) {
+        throw new Error("File URL is required");
+      }
+      
+      if (!documentName) {
+        throw new Error("Document name is required");
+      }
+      
+      const docName = await downloadFile(fileUrl, documentName);
+      
+      return {
+        content: [{
+          type: "text",
+          text: `Added document '${docName}' with content from ${fileUrl}`
+        }]
+      };
+    }
+    
     default:
       throw new Error("Unknown tool");
   }
 });
 
 /**
- * Handler that lists available prompts.
- * Exposes a single "summarize_notes" prompt that summarizes all notes.
+ * Handler for listing available prompts
  */
 server.setRequestHandler(ListPromptsRequestSchema, async () => {
   return {
     prompts: [
       {
-        name: "summarize_notes",
-        description: "Summarize all notes",
+        name: "summarize_collection",
+        description: "Summarize a document collection",
       }
     ]
   };
 });
 
 /**
- * Handler for the summarize_notes prompt.
- * Returns a prompt that requests summarization of all notes, with the notes' contents embedded as resources.
+ * Handler for getting a prompt
  */
 server.setRequestHandler(GetPromptRequestSchema, async (request) => {
-  if (request.params.name !== "summarize_notes") {
+  if (request.params.name !== "summarize_collection") {
     throw new Error("Unknown prompt");
   }
 
-  const embeddedNotes = Object.entries(notes).map(([id, note]) => ({
-    type: "resource" as const,
-    resource: {
-      uri: `note:///${id}`,
-      mimeType: "text/plain",
-      text: note.content
-    }
-  }));
-
+  const collections = await listDocumentCollections();
+  
   return {
     messages: [
       {
         role: "user",
         content: {
           type: "text",
-          text: "Please summarize the following notes:"
+          text: "Please list the available document collections and summarize how to use the RAG functionality."
         }
       },
-      ...embeddedNotes.map(note => ({
-        role: "user" as const,
-        content: note
-      })),
       {
         role: "user",
         content: {
           type: "text",
-          text: "Provide a concise summary of all the notes above."
+          text: `Available document collections:\n${collections.map(c => `- ${c.name}: ${c.description}`).join('\n')}\n\nUse the 'rag_query' tool to ask questions about these documents.`
         }
       }
     ]
@@ -208,14 +503,14 @@ server.setRequestHandler(GetPromptRequestSchema, async (request) => {
 });
 
 /**
- * Start the server using stdio transport.
- * This allows the server to communicate via standard input/output streams.
+ * Main function to start the server
  */
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
 
+// Start the server
 main().catch((error) => {
   console.error("Server error:", error);
   process.exit(1);
