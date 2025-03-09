@@ -154,17 +154,41 @@ async function readDirectoryRecursively(dirPath: string): Promise<Document[]> {
 
 /**
  * Load and index a document collection
+ * 存在しないコレクションの場合は自動的に作成を試みる
  */
 async function loadDocumentCollection(collectionId: string): Promise<VectorStoreIndex> {
   if (indices[collectionId]?.index) {
     return indices[collectionId].index;
   }
 
-  const collections = await listDocumentCollections();
-  const collection = collections.find(c => c.id === collectionId);
+  let collections = await listDocumentCollections();
+  let collection = collections.find(c => c.id === collectionId);
   
+  // 特定のコレクションが存在しない場合、自動的に作成を試みる
   if (!collection) {
-    throw new Error(`Document collection not found: ${collectionId}`);
+    console.log(`Document collection not found: ${collectionId}, trying to create it automatically`);
+    
+    try {
+      // hono-docsの場合はHonoドキュメントを自動的にクローン
+      if (collectionId === 'hono-docs') {
+        const repoName = await cloneRepository('https://github.com/honojs/hono.git', 'docs', 'hono-docs');
+        console.log(`Successfully cloned Hono documentation as ${repoName}`);
+        // コレクションリストを更新
+        collections = await listDocumentCollections();
+        collection = collections.find(c => c.id === collectionId);
+      } else {
+        // その他のコレクションの場合はエラーをスロー
+        throw new Error(`Document collection not found: ${collectionId}`);
+      }
+    } catch (error: any) {
+      console.error(`Failed to create collection ${collectionId}:`, error.message);
+      throw new Error(`Failed to create document collection: ${collectionId}`);
+    }
+    
+    // 作成してもなお存在しない場合はエラー
+    if (!collection) {
+      throw new Error(`Document collection not found after creation attempt: ${collectionId}`);
+    }
   }
 
   let documents: Document[] = [];
@@ -457,8 +481,30 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         throw new Error("Collection ID and query are required");
       }
       
-      // Load and index document collection if needed
-      const index = await loadDocumentCollection(collectionId);
+      try {
+        // コレクションが存在するか確認し、存在しなければ自動的に作成を試みる
+        let collections = await listDocumentCollections();
+        let collection = collections.find(c => c.id === collectionId);
+        
+        if (!collection) {
+          console.log(`Collection not found: ${collectionId}, trying to create it automatically`);
+          
+          // hono-docsの場合はHonoドキュメントを自動的にクローン
+          if (collectionId === 'hono-docs') {
+            const repoName = await cloneRepository('https://github.com/honojs/hono.git', 'docs', 'hono-docs');
+            console.log(`Successfully cloned Hono documentation as ${repoName}`);
+          } else {
+            return {
+              content: [{
+                type: "text",
+                text: `Collection '${collectionId}' not found. For 'hono-docs', the system will automatically clone the Hono documentation. For other collections, please add them manually using add_git_repository or add_text_file tools.`
+              }]
+            };
+          }
+        }
+        
+        // Load and index document collection if needed
+        const index = await loadDocumentCollection(collectionId);
       
       // 一時的にGemini LLMを設定
       const originalLLM = Settings.llm;
@@ -486,6 +532,15 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           text: response.toString()
         }]
       };
+      } catch (error: any) {
+        console.error(`Error in rag_query:`, error.message);
+        return {
+          content: [{
+            type: "text",
+            text: `Error processing query: ${error.message}`
+          }]
+        };
+      }
     }
     
     case "add_git_repository": {
