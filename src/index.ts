@@ -350,7 +350,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             document_name: {
               type: "string",
-              description: "Name of the document (will be used as directory name)"
+              description: "Name of the document (will be used as directory name). Choose a descriptive name rather than using the URL filename (e.g. 'hono-docs' instead of 'llms-full.txt')"
             }
           },
           required: ["file_url", "document_name"]
