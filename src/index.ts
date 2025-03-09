@@ -164,31 +164,9 @@ async function loadDocument(documentId: string): Promise<VectorStoreIndex> {
   let documents = await listDocuments();
   let document = documents.find(c => c.id === documentId);
   
-  // 特定のドキュメントが存在しない場合、自動的に作成を試みる
+  // ドキュメントが存在しない場合はエラーをスロー
   if (!document) {
-    console.log(`Document not found: ${documentId}, trying to create it automatically`);
-    
-    try {
-      // hono-docsの場合はHonoドキュメントを自動的にクローン
-      if (documentId === 'hono-docs') {
-        const repoName = await cloneRepository('https://github.com/honojs/hono.git', 'docs', 'hono-docs');
-        console.log(`Successfully cloned Hono documentation as ${repoName}`);
-        // ドキュメントリストを更新
-        documents = await listDocuments();
-        document = documents.find(c => c.id === documentId);
-      } else {
-        // その他のドキュメントの場合はエラーをスロー
-        throw new Error(`Document not found: ${documentId}`);
-      }
-    } catch (error: any) {
-      console.error(`Failed to create document ${documentId}:`, error.message);
-      throw new Error(`Failed to create document: ${documentId}`);
-    }
-    
-    // 作成してもなお存在しない場合はエラー
-    if (!document) {
-      throw new Error(`Document not found after creation attempt: ${documentId}`);
-    }
+    throw new Error(`Document not found: ${documentId}`);
   }
 
   let documentItems: Document[] = [];
@@ -442,7 +420,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
             },
             document_name: {
               type: "string",
-              description: "Name of the document (will be used as directory name). Choose a descriptive name rather than using the URL filename (e.g. 'hono-docs' instead of 'llms-full.txt')"
+              description: "Name of the document (will be used as directory name). Choose a descriptive name rather than using the URL filename (e.g. 'hono' instead of 'llms-full.txt')"
             }
           },
           required: ["file_url", "document_name"]
@@ -487,20 +465,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         let document = documents.find(c => c.id === documentId);
         
         if (!document) {
-          console.log(`Document not found: ${documentId}, trying to create it automatically`);
-          
-          // hono-docsの場合はHonoドキュメントを自動的にクローン
-          if (documentId === 'hono-docs') {
-            const repoName = await cloneRepository('https://github.com/honojs/hono.git', 'docs', 'hono-docs');
-            console.log(`Successfully cloned Hono documentation as ${repoName}`);
-          } else {
-            return {
-              content: [{
-                type: "text",
-                text: `Document '${documentId}' not found. For 'hono-docs', the system will automatically clone the Hono documentation. For other documents, please add them manually using add_git_repository or add_text_file tools.`
-              }]
-            };
-          }
+          return {
+            content: [{
+              type: "text",
+              text: `Document '${documentId}' not found. Please add it manually using add_git_repository or add_text_file tools.`
+            }]
+          };
         }
         
         // Load and index document if needed
